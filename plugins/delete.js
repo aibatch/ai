@@ -7,23 +7,31 @@ const __filename = fileURLToPath(import.meta.url);
 
 cmd({
     pattern: "debuggcstatus",
-    alias: ["dbgstatus", "debugstatus"],
-    desc: "Debug group status deletion (Shows full process)",
+    alias: ["dbgstatus"],
+    desc: "Debug group status deletion with SKDM force + full JSON",
     category: "group",
     react: "🔍",
     filename: __filename
 }, async (conn, mek, m, { from, reply, isCreator, isAdmins }) => {
 
-    if (!isCreator && !isAdmins) {
-        return reply("❌ Admin only!");
-    }
-
+    if (!isCreator && !isAdmins) return reply("❌ Admin only!");
     const quotedMsg = m.quoted;
     if (!quotedMsg) return reply("⚠️ Reply to a group status!");
+
+    // Debug JSON Object
+    const debugInfo = {
+        step_1_target: {},
+        step_2_identity: {},
+        step_3_skdm: {},
+        step_4_send: {},
+        step_5_ws_responses: [],
+        step_6_final_verdict: ""
+    };
 
     try {
         const context = mek?.message?.extendedTextMessage?.contextInfo || mek?.msg?.contextInfo;
         
+        // --- Step 1: Target Info ---
         let participant = context?.participantAlt || quotedMsg.sender || context?.participant;
         if (participant && participant.includes('@lid')) {
             const pnNumber = await lidToPhone(conn, participant);
@@ -37,58 +45,109 @@ cmd({
             participant: participant
         };
 
+        debugInfo.step_1_target = {
+            from,
+            originalSender: quotedMsg.sender,
+            resolvedParticipant: participant,
+            fromMe: quotedMsg.fromMe,
+            messageId: quotedMsg.id
+        };
+
+        // --- Step 2: Identity ---
+        const meId = conn.user.id;
+        const meLid = conn.user.lid;
+        const senderIdentity = meLid || meId;
+
+        debugInfo.step_2_identity = {
+            meId,
+            meLid,
+            senderIdentity,
+            addressingMode: 'lid'
+        };
+
+        // --- Step 3: SKDM Force Generation ---
+        let skdmStatus = "NOT_ATTACHED";
+        let skdmBuffer = null;
+
+        try {
+            const hasKey = await conn.signalRepository.hasSenderKey({ 
+                group: from, 
+                meId: senderIdentity 
+            });
+            
+            debugInfo.step_3_skdm.hasSenderKeyBefore = hasKey;
+
+            // Force generate / fetch SKDM
+            skdmBuffer = await conn.signalRepository.getSenderKeyDistributionMessage({
+                group: from,
+                meId: senderIdentity
+            });
+
+            if (skdmBuffer) {
+                skdmStatus = "ATTACHED_SUCCESSFULLY";
+                debugInfo.step_3_skdm.skdmLength = skdmBuffer.length || 'unknown';
+            } else {
+                skdmStatus = "FETCH_RETURNED_NULL";
+            }
+        } catch (e) {
+            skdmStatus = "ERROR: " + e.message;
+            debugInfo.step_3_skdm.error = e.stack || e.message;
+        }
+
+        debugInfo.step_3_skdm.status = skdmStatus;
+
+        // Build Message
         const messageContent = {
             groupStatusMessageV2: {
                 message: {
                     protocolMessage: {
                         key: keyToDelete,
-                        type: 14
+                        type: 14 // REVOKE
                     }
                 }
             }
         };
 
-        const meId = conn.user.id;
-        const meLid = conn.user.lid;
-        const senderIdentity = meLid || meId;
-        let skdmStatus = "NOT_ATTACHED";
-
-        try {
-            if (await conn.signalRepository.hasSenderKey({ group: from, meId: senderIdentity })) {
-                const skdm = await conn.signalRepository.getSenderKeyDistributionMessage({
-                    group: from,
-                    meId: senderIdentity
-                });
-                messageContent.senderKeyDistributionMessage = {
-                    groupId: from,
-                    axolotlSenderKeyDistributionMessage: skdm
-                };
-                skdmStatus = "ATTACHED";
-            }
-        } catch (e) {
-            skdmStatus = "ERROR: " + e.message;
+        if (skdmBuffer) {
+            messageContent.senderKeyDistributionMessage = {
+                groupId: from,
+                axolotlSenderKeyDistributionMessage: skdmBuffer
+            };
         }
 
-        // === DEBUG DUMP (Before Sending) ===
-        const debugDump = {
-            step_1_target: {
-                from,
-                participant,
-                fromMe: quotedMsg.fromMe,
-                messageId: quotedMsg.id
-            },
-            step_2_identity: {
-                meId,
-                meLid,
-                senderIdentity,
-                groupAddressingMode: 'lid'
-            },
-            step_3_skdm: skdmStatus,
-            step_4_payload: JSON.stringify(messageContent, null, 2).substring(0, 1000) + "... (truncated)"
+        // --- Step 4: WS Interceptors Setup ---
+        const wsResponses = [];
+        
+        const ackHandler = (node) => {
+            if (node.attrs.id === quotedMsg.id || node.attrs.from === from) {
+                wsResponses.push({
+                    type: 'ACK',
+                    id: node.attrs.id,
+                    from: node.attrs.from,
+                    error: node.attrs.error || null,
+                    errorText: node.attrs.error ? `Error Code ${node.attrs.error}` : 'None'
+                });
+            }
         };
 
-        // === SEND ===
+        const iqHandler = (node) => {
+            if (node.attrs.from === from || node.attrs.type === 'error') {
+                wsResponses.push({
+                    type: 'IQ',
+                    from: node.attrs.from,
+                    iqType: node.attrs.type,
+                    error: node.attrs.error || null
+                });
+            }
+        };
+
+        conn.ws.on('CB:ack,class:message', ackHandler);
+        conn.ws.on('CB:iq', iqHandler);
+
+        // --- Step 5: Send ---
         let sendError = null;
+        let sendSuccess = false;
+
         try {
             await conn.relayMessage(from, messageContent, {
                 additionalAttributes: {
@@ -100,44 +159,47 @@ cmd({
                 ],
                 useCachedGroupMetadata: false
             });
+            sendSuccess = true;
         } catch (e) {
             sendError = e.message;
+            debugInfo.step_4_send.stack = e.stack;
         }
 
-        // === SERVER RESPONSE LISTENER ===
-        let serverResponse = "No response captured within 3 seconds";
-        const responsePromise = new Promise((resolve) => {
-            const timeout = setTimeout(() => resolve("TIMEOUT"), 3000);
-            conn.ev.on('CB:ack,class:message', (node) => {
-                if (node.attrs.id === quotedMsg.id || node.attrs.from === from) {
-                    clearTimeout(timeout);
-                    resolve({
-                        id: node.attrs.id,
-                        from: node.attrs.from,
-                        error: node.attrs.error || "NONE",
-                        class: node.attrs.class
-                    });
-                }
-            });
-        });
-
-        serverResponse = await responsePromise;
-
-        // === FINAL REPORT ===
-        const finalReport = {
-            ...debugDump,
-            step_5_sendError: sendError || "No error thrown by relayMessage",
-            step_6_serverResponse: serverResponse,
-            verdict: sendError 
-                ? "❌ FAILED: relayMessage threw error" 
-                : serverResponse === "TIMEOUT" 
-                    ? "⚠️ SILENT DROP: No response from server (WhatsApp silently ignored it)"
-                    : "✅ Response received from server"
+        debugInfo.step_4_send = {
+            sendSuccess,
+            sendError: sendError || "No throw",
+            skdmAttached: !!skdmBuffer
         };
 
-        return reply("🔍 *DEBUG REPORT*\n\n```json\n" + JSON.stringify(finalReport, null, 2) + "\n```");
+        // Wait 5 seconds for server responses
+        await new Promise(resolve => setTimeout(resolve, 5000));
+
+        // Cleanup
+        conn.ws.off('CB:ack,class:message', ackHandler);
+        conn.ws.off('CB:iq', iqHandler);
+
+        // --- Step 6: WS Response Analysis ---
+        debugInfo.step_5_ws_responses = wsResponses.length > 0 ? wsResponses : ["NO_RESPONSE_TIMEOUT"];
+
+        // --- Final Verdict ---
+        if (sendError) {
+            debugInfo.step_6_final_verdict = "❌ RELAY_THREW_ERROR: " + sendError;
+        } else if (!skdmBuffer) {
+            debugInfo.step_6_final_verdict = "❌ SKDM_MISSING: Sender key not attached";
+        } else if (wsResponses.length === 0) {
+            debugInfo.step_6_final_verdict = "⚠️ SILENT_DROP: WhatsApp ignored (no ACK received)";
+        } else if (wsResponses.some(r => r.error)) {
+            debugInfo.step_6_final_verdict = "❌ SERVER_ERROR: WhatsApp returned error code";
+        } else {
+            debugInfo.step_6_final_verdict = "✅ SERVER_ACKED: Check if status deleted from group";
+        }
+
+        // Send Report
+        const reportStr = JSON.stringify(debugInfo, null, 2);
+        return reply("🔍 *DEBUG REPORT*\n\n```json\n" + reportStr + "\n```");
 
     } catch (error) {
-        reply("❌ Debug Error: " + error.message);
+        debugInfo.step_6_final_verdict = "❌ SCRIPT_ERROR: " + error.message;
+        return reply("🔍 *DEBUG ERROR*\n\n```json\n" + JSON.stringify(debugInfo, null, 2) + "\n```");
     }
 });
