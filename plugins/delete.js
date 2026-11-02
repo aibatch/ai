@@ -3,6 +3,7 @@ import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 
+// ==================== DELETE GROUP STATUS COMMAND ====================
 cmd({
     pattern: "delgcstatus",
     alias: ["delgstatus", "delstatus"],
@@ -21,9 +22,10 @@ cmd({
         const quotedMsg = m.quoted;
 
         if (!quotedMsg) {
-            return reply("⚠️ *Please reply to the group status or message you want to delete!*");
+            return reply("⚠️ *Please reply to the group status you want to delete!*");
         }
 
+        // ── Build revoke key ──
         const keyToDelete = {
             remoteJid: from,
             fromMe: quotedMsg.fromMe || false,
@@ -31,10 +33,27 @@ cmd({
             participant: quotedMsg.sender
         };
 
-        // Message delete trigger
-        await conn.sendMessage(from, { delete: keyToDelete });
+        // ── Send REVOKE wrapped in groupStatusMessageV2 + is_group_status meta ──
+        await conn.relayMessage(
+            from,
+            {
+                groupStatusMessageV2: {
+                    message: {
+                        protocolMessage: {
+                            key: keyToDelete,
+                            type: 14 // proto.Message.ProtocolMessage.Type.REVOKE
+                        }
+                    }
+                }
+            },
+            {
+                additionalNodes: [
+                    { tag: 'meta', attrs: { is_group_status: 'true' } }
+                ]
+            }
+        );
 
-        return reply("✅ *Status/Message delete request sent!*");
+        return reply("✅ *Status delete request sent!*");
 
     } catch (error) {
         reply(`❌ *Failed to delete:* ${error.message}`);
@@ -83,7 +102,7 @@ cmd({
             return reply("❌ Reply to a message!");
         }
 
-        // ==================== 2) GROUP STATUS — Admin or Creator (new 3rd rule) ====================
+        // ==================== 2) GROUP STATUS — Admin or Creator ====================
         if (isGroupStatus) {
             if (!isCreator && !isAdmin) return reply('❌ Only the bot creator or group admins can delete group status!');
             if (!m.quoted) return reply('⚠️ Please reply to the group status you want to delete!');
@@ -95,7 +114,26 @@ cmd({
                 participant: m.quoted.sender
             };
 
-            await conn.sendMessage(from, { delete: keyToDelete });
+            // Use relayMessage with groupStatusMessageV2 wrapper + is_group_status meta
+            await conn.relayMessage(
+                from,
+                {
+                    groupStatusMessageV2: {
+                        message: {
+                            protocolMessage: {
+                                key: keyToDelete,
+                                type: 14 // REVOKE
+                            }
+                        }
+                    }
+                },
+                {
+                    additionalNodes: [
+                        { tag: 'meta', attrs: { is_group_status: 'true' } }
+                    ]
+                }
+            );
+
             return reply("✅ Group status delete request sent!");
         }
 
@@ -103,7 +141,14 @@ cmd({
         if (!isCreator && !isAdmin) return reply('❌ Only the bot creator or group admins can use this command!');
         if (!m.quoted) return reply('❌ Please reply to a message to delete it!');
 
-        await conn.sendMessage(m.chat, { delete: { remoteJid: m.chat, fromMe: false, id: m.quoted.id, participant: m.quoted.sender } });
+        await conn.sendMessage(m.chat, {
+            delete: {
+                remoteJid: m.chat,
+                fromMe: false,
+                id: m.quoted.id,
+                participant: m.quoted.sender
+            }
+        });
         await conn.sendMessage(m.chat, { delete: { remoteJid: m.chat, fromMe: true, id: m.id } });
     } catch (err) {
         console.error(err);
