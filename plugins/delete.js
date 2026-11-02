@@ -27,6 +27,8 @@ cmd({
             participant: quotedMsg.sender
         };
 
+        // We send the revoke wrapped inside groupStatusMessageV2, 
+        // pass edit: '8' to prevent upload, and FORCE the meta tag via additionalNodes.
         await conn.relayMessage(
             from,
             {
@@ -41,8 +43,11 @@ cmd({
             },
             {
                 additionalAttributes: {
-                    edit: quotedMsg.fromMe ? '7' : '8' // <--- THIS PREVENTS THE DUMMY UPLOAD
-                }
+                    edit: quotedMsg.fromMe ? '7' : '8'
+                },
+                additionalNodes: [
+                    { tag: 'meta', attrs: { is_group_status: 'true' } }
+                ]
             }
         );
 
