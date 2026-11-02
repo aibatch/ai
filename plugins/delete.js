@@ -1,6 +1,7 @@
 import { cmd } from '../command.js';
 import { fileURLToPath } from 'url';
 import { lidToPhone } from '../lib/functions.js'; 
+import { proto, encodeWAMessage } from '@whiskeysockets/baileys';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -13,7 +14,6 @@ cmd({
     filename: __filename
 }, async (conn, mek, m, { from, reply, isCreator, isAdmins }) => {
 
-    // ── Owner & Admin verification ──
     if (!isCreator && !isAdmins) {
         return reply("❌ This command is only for *Group Admins* or the *Bot Owner*!");
     }
@@ -24,15 +24,11 @@ cmd({
 
         const context = mek?.message?.extendedTextMessage?.contextInfo || mek?.msg?.contextInfo;
         
-        // 1. Get the raw LID or sender
+        // 1. Convert LID to Phone Number
         let participant = quotedMsg.sender || context?.participant;
-
-        // 2. Convert LID to Phone Number using your custom function
         if (participant && participant.includes('@lid')) {
             const pnNumber = await lidToPhone(conn, participant);
-            if (pnNumber) {
-                participant = `${pnNumber}@s.whatsapp.net`;
-            }
+            if (pnNumber) participant = `${pnNumber}@s.whatsapp.net`;
         }
 
         const keyToDelete = {
@@ -42,26 +38,54 @@ cmd({
             participant: participant
         };
 
-        // 3. Send the exact payload to bypass Official Baileys' limitations
-        await conn.relayMessage(
-            from,
-            {
-                groupStatusMessageV2: {
-                    message: {
-                        protocolMessage: {
-                            key: keyToDelete,
-                            type: 14 // REVOKE
-                        }
+        // 2. Fetch the SKDM (Sender Key Distribution Message) manually
+        const meId = conn.user.id;
+        const meLid = conn.user.lid;
+        const senderIdentity = meLid || meId;
+        let skdm = undefined;
+
+        try {
+            if (await conn.signalRepository.hasSenderKey({ group: from, meId: senderIdentity })) {
+                skdm = await conn.signalRepository.getSenderKeyDistributionMessage({
+                    group: from,
+                    meId: senderIdentity
+                });
+            }
+        } catch (e) {
+            console.log("Failed to fetch SKDM:", e.message);
+        }
+
+        // 3. Build the exact Mod Baileys structure
+        const statusRevoke = {
+            groupStatusMessageV2: {
+                message: {
+                    protocolMessage: {
+                        key: keyToDelete,
+                        type: 14 // REVOKE
                     }
                 }
-            },
+            }
+        };
+
+        // Inject the SKDM so WhatsApp accepts the encryption
+        if (skdm) {
+            statusRevoke.senderKeyDistributionMessage = {
+                groupId: from,
+                axolotlSenderKeyDistributionMessage: skdm
+            };
+        }
+
+        // 4. Send it using relayMessage (Official Baileys will encrypt it with our SKDM)
+        await conn.relayMessage(
+            from,
+            statusRevoke,
             {
                 additionalAttributes: {
-                    edit: quotedMsg.fromMe ? '7' : '8', // Tells WA it's a delete (prevents dummy upload)
-                    addressing_mode: 'lid'              // Forces correct LID routing
+                    edit: quotedMsg.fromMe ? '7' : '8',
+                    addressing_mode: 'lid'
                 },
                 additionalNodes: [
-                    { tag: 'meta', attrs: { is_group_status: 'true' } } // Forces status deletion
+                    { tag: 'meta', attrs: { is_group_status: 'true' } }
                 ]
             }
         );
