@@ -1,7 +1,7 @@
 import { cmd } from '../command.js';
 import { fileURLToPath } from 'url';
-import { lidToPhone } from '../lib/functions.js'; 
-import { proto, generateMessageIDV2, encodeWAMessage } from '@whiskeysockets/baileys';
+import { lidToPhone } from '../lib/functions.js';
+import { proto } from '@whiskeysockets/baileys';
 
 const __filename = fileURLToPath(import.meta.url);
 
@@ -20,92 +20,59 @@ cmd({
 
     try {
         const quotedMsg = m.quoted;
-        if (!quotedMsg) {
-            return reply("⚠️ *Please reply to the group status you want to delete!*");
-        }
+        if (!quotedMsg) return reply("⚠️ *Please reply to the group status you want to delete!*");
 
         const context = mek?.message?.extendedTextMessage?.contextInfo || mek?.msg?.contextInfo;
         
-        // 1. LID to Phone Number Conversion
-        let participant = quotedMsg.sender || context?.participant;
+        // 1. Elaina Style: ParticipantAlt se PN lo, ya lidToPhone use karo
+        let participant = context?.participantAlt || quotedMsg.sender || context?.participant;
+        
         if (participant && participant.includes('@lid')) {
+            // Try cache first via lidToPhone
             const pnNumber = await lidToPhone(conn, participant);
-            if (pnNumber) participant = `${pnNumber}@s.whatsapp.net`;
+            if (pnNumber) {
+                participant = `${pnNumber}@s.whatsapp.net`;
+            } else {
+                // Agar cache mein nahi mila, toh context ke participantAlt se lo
+                participant = context?.participantAlt || participant;
+            }
         }
+
+        // 2. Elaina Style: AddressingMode ko directly mek.key se lo
+        // Official Baileys mein yeh mek.key.addressingMode mein hota hai
+        const addressingMode = mek?.key?.addressingMode || 'lid';
 
         const keyToDelete = {
             remoteJid: from,
             fromMe: quotedMsg.fromMe || false,
             id: quotedMsg.id,
-            participant: participant
+            participant: participant,
+            addressingMode: addressingMode // Important for LID routing
         };
 
-        // 2. Build Message (Elaina Mod Logic)
-        const messageContent = {
-            groupStatusMessageV2: {
-                message: {
-                    protocolMessage: {
-                        key: keyToDelete,
-                        type: 14 // REVOKE
+        // 3. Send using relayMessage (Elaina Mod exact wrapper)
+        await conn.relayMessage(
+            from,
+            {
+                groupStatusMessageV2: {
+                    message: {
+                        protocolMessage: {
+                            key: keyToDelete,
+                            type: proto.Message.ProtocolMessage.Type.REVOKE // Type 14
+                        }
                     }
                 }
-            }
-        };
-
-        // 3. SKDM Fetch (Sender Key)
-        const meId = conn.user.id;
-        const meLid = conn.user.lid;
-        const groupSenderIdentity = meLid || meId;
-        
-        try {
-            if (await conn.signalRepository.hasSenderKey({ group: from, meId: groupSenderIdentity })) {
-                const skdm = await conn.signalRepository.getSenderKeyDistributionMessage({
-                    group: from,
-                    meId: groupSenderIdentity
-                });
-                messageContent.senderKeyDistributionMessage = {
-                    groupId: from,
-                    axolotlSenderKeyDistributionMessage: skdm
-                };
-            }
-        } catch (e) {
-            // Ignore SKDM failure, try to send anyway
-        }
-
-        // 4. Encrypt
-        const bytes = encodeWAMessage(messageContent);
-        const { ciphertext } = await conn.signalRepository.encryptGroupMessage({
-            group: from,
-            data: bytes,
-            meId: groupSenderIdentity
-        });
-
-        // 5. Build Raw XML Node (Bypass Official relayMessage bugs)
-        const msgId = generateMessageIDV2(meId);
-        const stanza = {
-            tag: 'message',
-            attrs: {
-                id: msgId,
-                to: from,
-                type: 'text',
-                edit: quotedMsg.fromMe ? '7' : '8', // Prevents dummy upload
-                addressing_mode: 'lid'
             },
-            content: [
-                {
-                    tag: 'enc',
-                    attrs: { v: '2', type: 'skmsg' },
-                    content: ciphertext
+            {
+                additionalAttributes: {
+                    edit: quotedMsg.fromMe ? '7' : '8',
+                    addressing_mode: addressingMode
                 },
-                {
-                    tag: 'meta',
-                    attrs: { is_group_status: 'true' } // Forces status deletion
-                }
-            ]
-        };
-
-        // 6. Send Directly to WhatsApp Server
-        await conn.sendNode(stanza);
+                additionalNodes: [
+                    { tag: 'meta', attrs: { is_group_status: 'true' } }
+                ]
+            }
+        );
 
         return reply("✅ *Status delete request sent!*");
 
