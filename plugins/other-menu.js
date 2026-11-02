@@ -11,7 +11,336 @@ import { lidToPhone, cleanPN, runtime } from '../lib/functions.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// ==================== CHANNEL INFO COMMAND ====================
+
+cmd({
+    pattern: "delete",
+    alias: ["del"],
+    desc: "Delete a message (own=creator, others=group admin/creator, inbox=creator, group status supported)",
+    react: "🗑️",
+    category: "owner",
+    filename: __filename
+}, async (conn, mek, m, { from, reply, isCreator, isGroup, isAdmins, sender, botNumber2 }) => {
+    try {
+        // ======================================================
+        // SPECIAL CASE: Group Status messages
+        // (groupStatusMentionMessage / groupStatusMessageV2)
+        // ======================================================
+        if (mek.message?.groupStatusMentionMessage || mek.message?.groupStatusMessageV2) {
+            const isBotOwn = mek.key.fromMe || sender === botNumber2;
+
+            // Ignore ONLY if it's bot's own status AND user is NOT creator.
+            // If creator is using it → do NOT ignore.
+            if (isBotOwn && !isCreator) return;
+
+            // Permission: group admins OR creator
+            if (!isCreator && !isAdmins) {
+                return reply("❌ This command is only for *Group Admins* or the *Bot Owner*!");
+            }
+
+            // Need a quoted message to delete
+            const quotedMsg = m.quoted
+                || mek.message?.groupStatusMentionMessage?.message?.groupStatusMessageV2
+                || mek.message?.groupStatusMessageV2;
+
+            if (!quotedMsg) {
+                return reply("⚠️ *Please reply to the group status you want to delete!*");
+            }
+
+            // Build key from the quoted msg
+            const keyToDelete = {
+                remoteJid: from,
+                fromMe: quotedMsg.fromMe || false,
+                id: quotedMsg.id,
+                participant: quotedMsg.sender
+            };
+
+            await conn.sendMessage(from, { delete: keyToDelete });
+
+            // Delete the command message itself
+            try {
+                await conn.sendMessage(from, {
+                    delete: { remoteJid: from, fromMe: true, id: m.id }
+                });
+            } catch (_) {}
+
+            // Plain confirmation (no quote)
+            await conn.sendMessage(from, { text: "✅ *Group Status Deleted Successfully*" });
+            return;
+        }
+
+        // ======================================================
+        // NORMAL MESSAGE DELETE
+        // No ignore for bot's own messages here —
+        // admins can delete ANY message (including bot's).
+        // ======================================================
+        let targetKey = null;
+        let targetFromMe = false;
+
+        const ctx = mek.message?.extendedTextMessage?.contextInfo
+            || mek.message?.imageMessage?.contextInfo
+            || mek.message?.videoMessage?.contextInfo
+            || mek.message?.stickerMessage?.contextInfo
+            || mek.message?.documentMessage?.contextInfo
+            || mek.message?.audioMessage?.contextInfo
+            || null;
+
+        if (m.quoted) {
+            const quotedKey = m.quoted.key || {};
+            targetKey = {
+                remoteJid: m.chat,
+                id: m.quoted.id || quotedKey.id || ctx?.stanzaId,
+                participant: m.quoted.sender || quotedKey.participant || ctx?.participant,
+                fromMe: quotedKey.fromMe === true || m.quoted.fromMe === true
+            };
+            targetFromMe = targetKey.fromMe;
+        } else if (ctx?.stanzaId) {
+            targetKey = {
+                remoteJid: m.chat,
+                id: ctx.stanzaId,
+                participant: ctx.participant,
+                fromMe: ctx.fromMe === true
+            };
+            targetFromMe = targetKey.fromMe;
+        }
+
+        if (!targetKey || !targetKey.id) {
+            return reply("❌ Reply to a message to delete it!");
+        }
+
+        // ---- Permission logic ----
+        if (!isGroup) {
+            // Inbox → creator only
+            if (!isCreator) return reply("❌ Only owner can use this command!");
+        } else {
+            // Group → admin or creator can delete ANY message
+            // (own or others', bot's or user's — no ignore)
+            if (!isAdmins && !isCreator) {
+                return reply("❌ Only group admins or the bot owner can use this command!");
+            }
+        }
+
+        // ---- Perform deletion (retry variants) ----
+        let deleted = false;
+
+        try {
+            await conn.sendMessage(m.chat, { delete: targetKey });
+            deleted = true;
+        } catch (e1) {
+            console.error("delete try1 failed:", e1?.message);
+        }
+
+        if (!deleted) {
+            try {
+                await conn.sendMessage(m.chat, {
+                    delete: { remoteJid: m.chat, id: targetKey.id, fromMe: targetKey.fromMe }
+                });
+                deleted = true;
+            } catch (e2) {
+                console.error("delete try2 failed:", e2?.message);
+            }
+        }
+
+        if (!deleted && targetKey.participant) {
+            try {
+                await conn.sendMessage(m.chat, {
+                    delete: {
+                        remoteJid: m.chat,
+                        id: targetKey.id,
+                        participant: targetKey.participant,
+                        fromMe: false
+                    }
+                });
+                deleted = true;
+            } catch (e3) {
+                console.error("delete try3 failed:", e3?.message);
+            }
+        }
+
+        if (!deleted) {
+            return reply("❌ Could not delete this message (unsupported type or insufficient permission).");
+        }
+
+        // Delete the command message itself
+        try {
+            await conn.sendMessage(m.chat, {
+                delete: { remoteJid: m.chat, fromMe: true, id: m.id }
+            });
+        } catch (_) {}
+
+        // Plain confirmation (no quote)
+        await conn.sendMessage(m.chat, { text: "✅ *Message Deleted Successfully*" });
+
+    } catch (err) {
+        console.error("delete cmd error:", err);
+        await reply(`❌ Failed to delete: ${err.message}`);
+    }
+});
+
+cmd({
+    pattern: "delgcstatus ",
+    alias: ["delstatus"],
+    desc: "Delete a message (own=creator, others=group admin/creator, inbox=creator, group status supported)",
+    react: "🚮",
+    category: "group",
+    filename: __filename
+}, async (conn, mek, m, { from, reply, isCreator, isGroup, isAdmins, sender, botNumber2 }) => {
+    try {
+        // ======================================================
+        // SPECIAL CASE: Group Status messages
+        // (groupStatusMentionMessage / groupStatusMessageV2)
+        // ======================================================
+        if (mek.message?.groupStatusMentionMessage || mek.message?.groupStatusMessageV2) {
+            const isBotOwn = mek.key.fromMe || sender === botNumber2;
+
+            // Ignore ONLY if it's bot's own status AND user is NOT creator.
+            // If creator is using it → do NOT ignore.
+            if (isBotOwn && !isCreator) return;
+
+            // Permission: group admins OR creator
+            if (!isCreator && !isAdmins) {
+                return reply("❌ This command is only for *Group Admins* or the *Bot Owner*!");
+            }
+
+            // Need a quoted message to delete
+            const quotedMsg = m.quoted
+                || mek.message?.groupStatusMentionMessage?.message?.groupStatusMessageV2
+                || mek.message?.groupStatusMessageV2;
+
+            if (!quotedMsg) {
+                return reply("⚠️ *Please reply to the group status you want to delete!*");
+            }
+
+            // Build key from the quoted msg
+            const keyToDelete = {
+                remoteJid: from,
+                fromMe: quotedMsg.fromMe || false,
+                id: quotedMsg.id,
+                participant: quotedMsg.sender
+            };
+
+            await conn.sendMessage(from, { delete: keyToDelete });
+
+            // Delete the command message itself
+            try {
+                await conn.sendMessage(from, {
+                    delete: { remoteJid: from, fromMe: true, id: m.id }
+                });
+            } catch (_) {}
+
+            // Plain confirmation (no quote)
+            await conn.sendMessage(from, { text: "✅ *Group Status Deleted Successfully*" });
+            return;
+        }
+
+        // ======================================================
+        // NORMAL MESSAGE DELETE
+        // No ignore for bot's own messages here —
+        // admins can delete ANY message (including bot's).
+        // ======================================================
+        let targetKey = null;
+        let targetFromMe = false;
+
+        const ctx = mek.message?.extendedTextMessage?.contextInfo
+            || mek.message?.imageMessage?.contextInfo
+            || mek.message?.videoMessage?.contextInfo
+            || mek.message?.stickerMessage?.contextInfo
+            || mek.message?.documentMessage?.contextInfo
+            || mek.message?.audioMessage?.contextInfo
+            || null;
+
+        if (m.quoted) {
+            const quotedKey = m.quoted.key || {};
+            targetKey = {
+                remoteJid: m.chat,
+                id: m.quoted.id || quotedKey.id || ctx?.stanzaId,
+                participant: m.quoted.sender || quotedKey.participant || ctx?.participant,
+                fromMe: quotedKey.fromMe === true || m.quoted.fromMe === true
+            };
+            targetFromMe = targetKey.fromMe;
+        } else if (ctx?.stanzaId) {
+            targetKey = {
+                remoteJid: m.chat,
+                id: ctx.stanzaId,
+                participant: ctx.participant,
+                fromMe: ctx.fromMe === true
+            };
+            targetFromMe = targetKey.fromMe;
+        }
+
+        if (!targetKey || !targetKey.id) {
+            return reply("❌ Reply to a message to delete it!");
+        }
+
+        // ---- Permission logic ----
+        if (!isGroup) {
+            // Inbox → creator only
+            if (!isCreator) return reply("❌ Only owner can use this command!");
+        } else {
+            // Group → admin or creator can delete ANY message
+            // (own or others', bot's or user's — no ignore)
+            if (!isAdmins && !isCreator) {
+                return reply("❌ Only group admins or the bot owner can use this command!");
+            }
+        }
+
+        // ---- Perform deletion (retry variants) ----
+        let deleted = false;
+
+        try {
+            await conn.sendMessage(m.chat, { delete: targetKey });
+            deleted = true;
+        } catch (e1) {
+            console.error("delete try1 failed:", e1?.message);
+        }
+
+        if (!deleted) {
+            try {
+                await conn.sendMessage(m.chat, {
+                    delete: { remoteJid: m.chat, id: targetKey.id, fromMe: targetKey.fromMe }
+                });
+                deleted = true;
+            } catch (e2) {
+                console.error("delete try2 failed:", e2?.message);
+            }
+        }
+
+        if (!deleted && targetKey.participant) {
+            try {
+                await conn.sendMessage(m.chat, {
+                    delete: {
+                        remoteJid: m.chat,
+                        id: targetKey.id,
+                        participant: targetKey.participant,
+                        fromMe: false
+                    }
+                });
+                deleted = true;
+            } catch (e3) {
+                console.error("delete try3 failed:", e3?.message);
+            }
+        }
+
+        if (!deleted) {
+            return reply("❌ Could not delete this message (unsupported type or insufficient permission).");
+        }
+
+        // Delete the command message itself
+        try {
+            await conn.sendMessage(m.chat, {
+                delete: { remoteJid: m.chat, fromMe: true, id: m.id }
+            });
+        } catch (_) {}
+
+        // Plain confirmation (no quote)
+        await conn.sendMessage(m.chat, { text: "✅ *Message Deleted Successfully*" });
+
+    } catch (err) {
+        console.error("delete cmd error:", err);
+        await reply(`❌ Failed to delete: ${err.message}`);
+    }
+});
+
+
 cmd({
     pattern: "channel",
     alias: ["chinfo", "channelinfo", "newsletter", "ch"],
@@ -406,51 +735,6 @@ cmd({
     }
 });
 
-// ==================== DELETE COMMAND ====================
-cmd({
-    pattern: "delete",
-    desc: "Delete any message",
-    react: "🗑️",
-    category: "owner",
-    filename: __filename
-}, async (conn, mek, m, { reply, quoted }) => {
-    if (quoted && quoted.key) {
-        try { await conn.sendMessage(mek.chat, { delete: quoted.key }); return; } catch (e) {}
-    }
-    const context = mek.message?.extendedTextMessage?.contextInfo;
-    if (context && context.stanzaId) {
-        try {
-            await conn.sendMessage(mek.chat, {
-                delete: { remoteJid: mek.chat, id: context.stanzaId, participant: context.participant, fromMe: false }
-            });
-            return;
-        } catch (e) {}
-    }
-    if (m.quoted && m.quoted.key) {
-        try { await conn.sendMessage(mek.chat, { delete: m.quoted.key }); return; } catch (e) {}
-    }
-    reply("❌ Reply to a message!");
-});
-
-// ==================== DEL COMMAND ====================
-cmd({
-    pattern: "del",
-    desc: "Delete a quoted message",
-    category: "group",
-    react: "🗑️",
-    filename: __filename
-}, async (conn, mek, m, { from, isCreator, isGroup, reply }) => {
-    try {
-        if (!isGroup) return reply('❌ This command can only be used in groups!');
-        if (!isCreator) return reply('❌ Only the bot creator can use this command!');
-        if (!m.quoted) return reply('❌ Please reply to a message to delete it!');
-        await conn.sendMessage(m.chat, { delete: { remoteJid: m.chat, fromMe: false, id: m.quoted.id, participant: m.quoted.sender } });
-        await conn.sendMessage(m.chat, { delete: { remoteJid: m.chat, fromMe: true, id: m.id } });
-    } catch (err) {
-        console.error(err);
-        await reply('❌ Failed to delete message. Something went wrong.');
-    }
-});
 
 // ==================== ALIVE COMMAND ====================
 cmd({
