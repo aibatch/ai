@@ -6,78 +6,138 @@ import { proto } from '@whiskeysockets/baileys';
 const __filename = fileURLToPath(import.meta.url);
 
 cmd({
-    pattern: "delgcstatus",
-    alias: ["delgstatus", "delstatus"],
-    desc: "Delete group status for everyone.",
+    pattern: "debuggcstatus",
+    alias: ["dbgstatus", "debugstatus"],
+    desc: "Debug group status deletion (Shows full process)",
     category: "group",
-    react: "🗑️",
+    react: "🔍",
     filename: __filename
 }, async (conn, mek, m, { from, reply, isCreator, isAdmins }) => {
 
     if (!isCreator && !isAdmins) {
-        return reply("❌ This command is only for *Group Admins* or the *Bot Owner*!");
+        return reply("❌ Admin only!");
     }
 
-    try {
-        const quotedMsg = m.quoted;
-        if (!quotedMsg) return reply("⚠️ *Please reply to the group status you want to delete!*");
+    const quotedMsg = m.quoted;
+    if (!quotedMsg) return reply("⚠️ Reply to a group status!");
 
+    try {
         const context = mek?.message?.extendedTextMessage?.contextInfo || mek?.msg?.contextInfo;
         
-        // 1. Elaina Style: ParticipantAlt se PN lo, ya lidToPhone use karo
         let participant = context?.participantAlt || quotedMsg.sender || context?.participant;
-        
         if (participant && participant.includes('@lid')) {
-            // Try cache first via lidToPhone
             const pnNumber = await lidToPhone(conn, participant);
-            if (pnNumber) {
-                participant = `${pnNumber}@s.whatsapp.net`;
-            } else {
-                // Agar cache mein nahi mila, toh context ke participantAlt se lo
-                participant = context?.participantAlt || participant;
-            }
+            if (pnNumber) participant = `${pnNumber}@s.whatsapp.net`;
         }
-
-        // 2. Elaina Style: AddressingMode ko directly mek.key se lo
-        // Official Baileys mein yeh mek.key.addressingMode mein hota hai
-        const addressingMode = mek?.key?.addressingMode || 'lid';
 
         const keyToDelete = {
             remoteJid: from,
             fromMe: quotedMsg.fromMe || false,
             id: quotedMsg.id,
-            participant: participant,
-            addressingMode: addressingMode // Important for LID routing
+            participant: participant
         };
 
-        // 3. Send using relayMessage (Elaina Mod exact wrapper)
-        await conn.relayMessage(
-            from,
-            {
-                groupStatusMessageV2: {
-                    message: {
-                        protocolMessage: {
-                            key: keyToDelete,
-                            type: proto.Message.ProtocolMessage.Type.REVOKE // Type 14
-                        }
+        const messageContent = {
+            groupStatusMessageV2: {
+                message: {
+                    protocolMessage: {
+                        key: keyToDelete,
+                        type: 14
                     }
                 }
+            }
+        };
+
+        const meId = conn.user.id;
+        const meLid = conn.user.lid;
+        const senderIdentity = meLid || meId;
+        let skdmStatus = "NOT_ATTACHED";
+
+        try {
+            if (await conn.signalRepository.hasSenderKey({ group: from, meId: senderIdentity })) {
+                const skdm = await conn.signalRepository.getSenderKeyDistributionMessage({
+                    group: from,
+                    meId: senderIdentity
+                });
+                messageContent.senderKeyDistributionMessage = {
+                    groupId: from,
+                    axolotlSenderKeyDistributionMessage: skdm
+                };
+                skdmStatus = "ATTACHED";
+            }
+        } catch (e) {
+            skdmStatus = "ERROR: " + e.message;
+        }
+
+        // === DEBUG DUMP (Before Sending) ===
+        const debugDump = {
+            step_1_target: {
+                from,
+                participant,
+                fromMe: quotedMsg.fromMe,
+                messageId: quotedMsg.id
             },
-            {
+            step_2_identity: {
+                meId,
+                meLid,
+                senderIdentity,
+                groupAddressingMode: 'lid'
+            },
+            step_3_skdm: skdmStatus,
+            step_4_payload: JSON.stringify(messageContent, null, 2).substring(0, 1000) + "... (truncated)"
+        };
+
+        // === SEND ===
+        let sendError = null;
+        try {
+            await conn.relayMessage(from, messageContent, {
                 additionalAttributes: {
                     edit: quotedMsg.fromMe ? '7' : '8',
-                    addressing_mode: addressingMode
+                    addressing_mode: 'lid'
                 },
                 additionalNodes: [
                     { tag: 'meta', attrs: { is_group_status: 'true' } }
-                ]
-            }
-        );
+                ],
+                useCachedGroupMetadata: false
+            });
+        } catch (e) {
+            sendError = e.message;
+        }
 
-        return reply("✅ *Status delete request sent!*");
+        // === SERVER RESPONSE LISTENER ===
+        let serverResponse = "No response captured within 3 seconds";
+        const responsePromise = new Promise((resolve) => {
+            const timeout = setTimeout(() => resolve("TIMEOUT"), 3000);
+            conn.ev.on('CB:ack,class:message', (node) => {
+                if (node.attrs.id === quotedMsg.id || node.attrs.from === from) {
+                    clearTimeout(timeout);
+                    resolve({
+                        id: node.attrs.id,
+                        from: node.attrs.from,
+                        error: node.attrs.error || "NONE",
+                        class: node.attrs.class
+                    });
+                }
+            });
+        });
+
+        serverResponse = await responsePromise;
+
+        // === FINAL REPORT ===
+        const finalReport = {
+            ...debugDump,
+            step_5_sendError: sendError || "No error thrown by relayMessage",
+            step_6_serverResponse: serverResponse,
+            verdict: sendError 
+                ? "❌ FAILED: relayMessage threw error" 
+                : serverResponse === "TIMEOUT" 
+                    ? "⚠️ SILENT DROP: No response from server (WhatsApp silently ignored it)"
+                    : "✅ Response received from server"
+        };
+
+        return reply("🔍 *DEBUG REPORT*\n\n```json\n" + JSON.stringify(finalReport, null, 2) + "\n```");
 
     } catch (error) {
-        console.error("delgcstatus error:", error);
-        reply(`❌ *Failed to delete:* ${error.message}`);
+        reply("❌ Debug Error: " + error.message);
     }
 });
