@@ -169,6 +169,107 @@ async (conn, mek, m, { from, reply, isCreator, args, updateUserConfig, userConfi
     }
 });
 
+// ==================== CHANNEL COMMAND ====================
+cmd({
+    pattern: "channel",
+    alias: ["setchannel", "ch", "setnewsletter", "setchannelid"],
+    desc: "Set newsletter/channel ID in config (from link, JID, or reply)",
+    react: "📢",
+    category: "settings",
+    filename: __filename,
+}, async (conn, mek, m, { from, reply, isCreator, text, args, userConfig, updateUserConfig, sanitizedNumber }) => {
+    try {
+        if (!isCreator) {
+            return reply("*📛 ᴛʜɪs ɪs ᴀɴ ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅ.*");
+        }
+
+        // Current value display
+        const currentId = String(userConfig?.DEV ?? config?.DEV ?? '').trim();
+        const currentDisplay = currentId.endsWith('@newsletter')
+            ? currentId
+            : `${currentId || 'not set'} (using fallback 120363430297481707@newsletter)`;
+
+        // No args → show current + usage
+        if (!text || !text.trim()) {
+            return reply(
+`📢 *CHANNEL / NEWSLETTER SETUP*
+
+*Cᴜʀʀᴇɴᴛ:* ${currentDisplay}
+
+*Usᴀɢᴇ:*
+• .channel https://whatsapp.com/channel/xxxxxxxxx
+• .channel 1289191@newsletter
+• .channel 1203634xxxxxxxx@newsletter
+• Reply to a channel message with .channel
+
+*Nᴏᴛᴇ:* Value must end with \`@newsletter\` to be used. Otherwise fallback ID will be used.`
+            );
+        }
+
+        let inviteId = null;
+        let resolvedJid = null;
+
+        // ---- Case 1: WhatsApp channel link ----
+        if (text.includes('whatsapp.com/channel/')) {
+            const match = text.match(/whatsapp\.com\/channel\/([\w-]+)/);
+            if (!match) {
+                return reply("⚠️ *Invalid channel link format.*\n\nMake sure it looks like:\nhttps://whatsapp.com/channel/xxxxxxxxx");
+            }
+            inviteId = match[1];
+
+            let metadata;
+            try {
+                metadata = await conn.newsletterMetadata("invite", inviteId);
+            } catch (e) {
+                return reply("❌ Failed to fetch channel metadata. Make sure the link is correct.");
+            }
+            if (!metadata || !metadata.id) return reply("❌ Channel not found or inaccessible.");
+            resolvedJid = metadata.id;
+        }
+
+        // ---- Case 2: Direct JID provided ----
+        else if (text.trim().endsWith('@newsletter')) {
+            resolvedJid = text.trim();
+        }
+
+        // ---- Case 3: Reply to a channel message ----
+        else if (m.quoted && m.quoted.chat && String(m.quoted.chat).endsWith('@newsletter')) {
+            resolvedJid = m.quoted.chat;
+        }
+
+        // ---- Case 4: Bare numeric ID (no @newsletter) ----
+        else {
+            const cleanNumber = text.trim().replace(/[^0-9]/g, '');
+            if (cleanNumber.length >= 10) {
+                resolvedJid = `${cleanNumber}@newsletter`;
+            } else {
+                return reply("⚠️ *Invalid input.*\n\nProvide a channel link, a valid JID (ending with @newsletter), reply to a channel message, or a numeric channel ID.");
+            }
+        }
+
+        // Final safety check
+        if (!resolvedJid || !resolvedJid.endsWith('@newsletter')) {
+            return reply("❌ Resolved value does not end with @newsletter. Please try again.");
+        }
+
+        // Save to user config
+        userConfig.DEV = resolvedJid;
+        await updateUserConfig(sanitizedNumber, userConfig);
+
+        await reply(
+`✅ *Nᴇᴡsʟᴇᴛᴛᴇʀ Cʜᴀɴɴᴇʟ Iᴅ sᴀᴠᴇᴅ!*
+
+📢 *ID:* ${resolvedJid}
+👤 *Sᴀᴠᴇᴅ ᴛᴏ:* userConfig.DEV
+
+> Updated by ${userConfig.BOT_NAME || config.BOT_NAME} 💜`
+        );
+    } catch (e) {
+        console.error("Channel Command Error:", e);
+        return reply(`⚠️ Error: ${e.message}`);
+    }
+});
+
 // ===============================
 // SUDO COMMAND
 // ===============================
