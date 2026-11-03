@@ -1,5 +1,3 @@
-// plugins/pingblock-menu.js - ESM Version (All Commands Merged)
-
 import { fileURLToPath } from 'url';
 import path from 'path';
 import config from '../config.js';
@@ -11,6 +9,14 @@ import fs from 'fs';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const FALLBACK_NEWSLETTER = '120363430297481707@newsletter';
+
+// Resolve newsletter JID from DEV (must end with @newsletter, else fallback)
+const resolveNewsletterJid = (userConfig) => {
+    const rawDev = String(userConfig?.DEV ?? config?.DEV ?? '').trim();
+    return rawDev.endsWith('@newsletter') ? rawDev : FALLBACK_NEWSLETTER;
+};
+
 // ==================== PING COMMAND ====================
 cmd({
     pattern: "ping",
@@ -21,8 +27,12 @@ cmd({
     react: "⚡",
     filename: __filename
 },
-async (conn, mek, m, { from, quoted, sender, reply }) => {
+async (conn, mek, m, { from, quoted, sender, reply, userConfig }) => {
     try {
+        const BOT_NAME = userConfig?.BOT_NAME || config.BOT_NAME;
+        const newsletterJid = resolveNewsletterJid(userConfig);
+        const newsletterName = BOT_NAME;
+
         const start = new Date().getTime();
         const reactionEmojis = ['🔥', '⚡', '🚀', '💨', '🎯', '🎉', '🌟', '💥', '🕐', '🔹'];
         const textEmojis = ['💎', '🏆', '⚡️', '🚀', '🎶', '🌠', '🌀', '🔱', '🛡️', '✨'];
@@ -36,7 +46,8 @@ async (conn, mek, m, { from, quoted, sender, reply }) => {
         });
         const end = new Date().getTime();
         const responseTime = (end - start) / 1000;
-        const text = `> *JAWAD-MD SPEED: ${responseTime.toFixed(2)}ms ${reactionEmoji}*`;
+        const text = `> *${BOT_NAME} SPEED: ${responseTime.toFixed(2)}ms ${reactionEmoji}*`;
+
         await conn.sendMessage(from, {
             text,
             contextInfo: {
@@ -44,8 +55,8 @@ async (conn, mek, m, { from, quoted, sender, reply }) => {
                 forwardingScore: 999,
                 isForwarded: true,
                 forwardedNewsletterMessageInfo: {
-                    newsletterJid: '120363430297481707@newsletter',
-                    newsletterName: "JawadTechX",
+                    newsletterJid,
+                    newsletterName,
                     serverMessageId: 143
                 }
             }
@@ -64,8 +75,9 @@ cmd({
     react: "⚡",
     filename: __filename
 },
-async (conn, mek, m, { from, reply }) => {
+async (conn, mek, m, { from, reply, userConfig }) => {
     try {
+        const BOT_NAME = userConfig?.BOT_NAME || config.BOT_NAME;
         const startTime = Date.now();
         await new Promise(resolve => setTimeout(resolve, 500));
         const endTime = Date.now();
@@ -75,7 +87,7 @@ async (conn, mek, m, { from, reply }) => {
         else if (ping < 1400) status = "⚙️ *Normal Speed*";
         else status = "🐢 *Slow Response*";
         const msg = `
-*╭┈──〔 ⚡ Kʜᴀɴ-ᴍᴅ Pɪɴɢ 〕─⊷*
+*╭┈──〔 ⚡ ${BOT_NAME} Pɪɴɢ 〕─⊷*
 *├▢ 📶 Response:* ${ping} ms
 *├▢ 🧠 Status:* ${status}
 *├▢ 💫 Mode:* Active & Stable
@@ -257,6 +269,18 @@ const formatCategory = (category, cmds) => {
     return `${title}${body}${footer}`;
 };
 
+const formatMenuOptions = (categories) => {
+    let menuOptions = '';
+    let optionNumber = 1;
+    categories.forEach(cat => {
+        const displayName = toSmallCaps(cat.charAt(0).toUpperCase() + cat.slice(1));
+        const menuText = toSmallCaps(' Menu');
+        menuOptions += `*┋ ⬡ ${optionNumber} ${displayName}${menuText}*\n`;
+        optionNumber++;
+    });
+    return menuOptions;
+};
+
 const getMediaType = (url) => {
     if (!url || typeof url !== 'string' || url.trim() === '') return null;
     const urlLower = url.toLowerCase();
@@ -267,7 +291,38 @@ const getMediaType = (url) => {
     return null;
 };
 
-// ==================== MENU COMMAND ====================
+const getCategorizedCommands = () => {
+    const commandsArray = Array.isArray(commands) ? commands : Object.values(commands);
+    const totalCommands = commandsArray.length;
+    const categories = [...new Set(commandsArray.map(c => c.category))].filter(cat =>
+        cat && cat.trim() !== '' && cat !== 'undefined'
+    );
+    const sortedCategories = categories.sort((a, b) => a.localeCompare(b));
+
+    const categorized = {};
+    sortedCategories.forEach(cat => {
+        const categoryCommands = commandsArray.filter(c => c.category === cat);
+        const validCommands = categoryCommands.filter(cmd => cmd.pattern && cmd.pattern.trim() !== '');
+        if (validCommands.length > 0) categorized[cat] = validCommands;
+    });
+
+    return { categorized, totalCommands };
+};
+
+const resolveMedia = async (botMediaUrl, localImagePath) => {
+    const mediaType = getMediaType(botMediaUrl);
+    if (mediaType === 'image' || mediaType === 'video') {
+        try {
+            await axios.head(botMediaUrl, { timeout: 3000 });
+            return { [mediaType]: { url: botMediaUrl } };
+        } catch {
+            return { image: { url: localImagePath } };
+        }
+    }
+    return { image: { url: localImagePath } };
+};
+
+// ==================== MENU COMMAND (Full) ====================
 cmd({
     pattern: "menu",
     alias: ["m", "fullmenu"],
@@ -279,40 +334,26 @@ cmd({
 },
 async (conn, mek, m, { from, sender, reply, userConfig }) => {
     try {
-        const BOT_NAME = userConfig?.BOT_NAME || config.BOT_NAME || "JawadTechX";
-        const OWNER_NAME = userConfig?.OWNER_NAME || config.OWNER_NAME || "Jawad";
-        const PREFIX = userConfig?.PREFIX || config.PREFIX || ".";
-        const VERSION = userConfig?.VERSION || config.VERSION || "2.0.0";
-        const MODE = userConfig?.MODE || config.MODE || "public";
-        const BOT_IMAGE = userConfig?.BOT_IMAGE || config.BOT_IMAGE || "";
-        const DESCRIPTION = userConfig?.DESCRIPTION || config.DESCRIPTION || "";
+        const BOT_NAME = userConfig?.BOT_NAME || config.BOT_NAME;
+        const OWNER_NAME = userConfig?.OWNER_NAME || config.OWNER_NAME;
+        const PREFIX = userConfig?.PREFIX || config.PREFIX;
+        const VERSION = userConfig?.VERSION || config.VERSION;
+        const MODE = userConfig?.MODE || config.MODE;
+        const BOT_IMAGE = userConfig?.BOT_IMAGE || config.BOT_IMAGE;
+        const DESCRIPTION = userConfig?.DESCRIPTION || config.DESCRIPTION;
+        const newsletterJid = resolveNewsletterJid(userConfig);
+        const newsletterName = BOT_NAME;
 
         await conn.sendPresenceUpdate('composing', from);
 
-        const commandsArray = Array.isArray(commands) ? commands : Object.values(commands);
-        let totalCommands = commandsArray.length;
-        const categories = [...new Set(commandsArray.map(c => c.category))].filter(cat =>
-            cat && cat.trim() !== '' && cat !== 'undefined'
-        );
-        const sortedCategories = categories.sort((a, b) => a.localeCompare(b));
-        const categorized = {};
-        sortedCategories.forEach(cat => {
-            const categoryCommands = commandsArray.filter(c => c.category === cat);
-            const validCommands = categoryCommands.filter(cmd => cmd.pattern && cmd.pattern.trim() !== '');
-            if (validCommands.length > 0) {
-                categorized[cat] = validCommands;
-            }
-        });
+        const { categorized, totalCommands } = getCategorizedCommands();
         let menuSections = '';
         for (const [category, cmds] of Object.entries(categorized)) {
-            if (cmds && cmds.length > 0) {
-                const section = formatCategory(category, cmds);
-                if (section !== '') {
-                    menuSections += section;
-                }
-            }
+            const section = formatCategory(category, cmds);
+            if (section) menuSections += section;
         }
-        let dec = `*╭┈───〔 ${BOT_NAME} 〕┈───⊷*
+
+        const dec = `*╭┈───〔 ${BOT_NAME} 〕┈───⊷*
 *├✦ Owner:* ${OWNER_NAME}
 *├✦ Commands:* ${totalCommands}
 *├✦ Runtime:* ${runtime(process.uptime())}
@@ -323,22 +364,10 @@ async (conn, mek, m, { from, sender, reply, userConfig }) => {
 ${menuSections}
 
 > ${DESCRIPTION}`;
-        let mediaData;
+
         const localImagePath = path.join(__dirname, '../lib/jawadmd.jpg');
-        const mediaType = getMediaType(BOT_IMAGE);
-        if (mediaType === 'image' || mediaType === 'video') {
-            try {
-                await axios.head(BOT_IMAGE, { timeout: 3000 });
-                mediaData = {
-                    [mediaType]: { url: BOT_IMAGE }
-                };
-            } catch (serverError) {
-                console.log('Media server down, using local image:', serverError.message);
-                mediaData = { image: { url: localImagePath } };
-            }
-        } else {
-            mediaData = { image: { url: localImagePath } };
-        }
+        const mediaData = await resolveMedia(BOT_IMAGE, localImagePath);
+
         await conn.sendMessage(from, {
             ...mediaData,
             caption: dec,
@@ -347,8 +376,8 @@ ${menuSections}
                 forwardingScore: 999,
                 isForwarded: true,
                 forwardedNewsletterMessageInfo: {
-                    newsletterJid: '120363430297481707@newsletter',
-                    newsletterName: BOT_NAME,
+                    newsletterJid,
+                    newsletterName,
                     serverMessageId: 143
                 }
             }
@@ -356,5 +385,117 @@ ${menuSections}
     } catch (e) {
         console.log(e);
         reply(`Error: ${e.message}`);
+    }
+});
+
+// ==================== MENU2 COMMAND (Interactive) ====================
+cmd({
+    pattern: "menu2",
+    alias: ["m2"],
+    desc: "Show all bot commands in selection menu",
+    category: "main",
+    react: "⚡",
+    filename: __filename
+},
+async (conn, mek, m, { from, sender, pushname, reply, userConfig }) => {
+    try {
+        const BOT_NAME = userConfig?.BOT_NAME || config.BOT_NAME;
+        const OWNER_NAME = userConfig?.OWNER_NAME || config.OWNER_NAME;
+        const PREFIX = userConfig?.PREFIX || config.PREFIX;
+        const VERSION = userConfig?.VERSION || config.VERSION;
+        const BOT_MEDIA_URL = userConfig?.BOT_MEDIA_URL || config.BOT_MEDIA_URL;
+        const newsletterJid = resolveNewsletterJid(userConfig);
+        const newsletterName = BOT_NAME;
+
+        const commonContextInfo = (mentionedJid) => ({
+            mentionedJid: [mentionedJid],
+            forwardingScore: 999,
+            isForwarded: true,
+            forwardedNewsletterMessageInfo: {
+                newsletterJid,
+                newsletterName,
+                serverMessageId: 143
+            }
+        });
+
+        await conn.sendPresenceUpdate('composing', from);
+
+        const { categorized, totalCommands } = getCategorizedCommands();
+        const availableCategories = Object.keys(categorized);
+        const menuOptions = formatMenuOptions(availableCategories);
+
+        const caption = `*╭┈───〔 ${BOT_NAME} 〕┈───⊷*
+*├▢ Owner:* ${OWNER_NAME}
+*├▢ Prefix:* ${PREFIX}
+*├▢ Version:* ${VERSION}
+*├▢ Plugins:* ${totalCommands}
+*├▢ Runtime:* ${runtime(process.uptime())}
+*╰───────────────────⊷*
+*╭───⬡ SELECT MENU ⬡───*
+${menuOptions}*╰───────────────────⊷*
+
+> *ʀᴇᴘʟʏ ᴡɪᴛʜ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴛᴏ sᴇʟᴇᴄᴛ ᴍᴇɴᴜ (1-${availableCategories.length})*`;
+
+        const localImagePath = path.join(__dirname, '../lib/khanmd.jpg');
+        const mainMenuMedia = await resolveMedia(BOT_MEDIA_URL, localImagePath);
+
+        const sentMsg = await conn.sendMessage(from, {
+            ...mainMenuMedia,
+            caption,
+            contextInfo: commonContextInfo(sender)
+        }, { quoted: mek });
+
+        const messageID = sentMsg.key.id;
+
+        const menuListener = async (msgData) => {
+            const receivedMsg = msgData.messages[0];
+            if (!receivedMsg.message) return;
+
+            const receivedText = receivedMsg.message.conversation || receivedMsg.message.extendedTextMessage?.text;
+            const senderID = receivedMsg.key.remoteJid;
+            const isReplyToBot = receivedMsg.message.extendedTextMessage?.contextInfo?.stanzaId === messageID;
+
+            if (!isReplyToBot) return;
+
+            conn.ev.off("messages.upsert", menuListener);
+            await conn.sendMessage(senderID, { react: { text: '⬇️', key: receivedMsg.key } });
+
+            const selectedNumber = parseInt(receivedText);
+            if (selectedNumber >= 1 && selectedNumber <= availableCategories.length) {
+                const selectedCategory = availableCategories[selectedNumber - 1];
+                const categoryCommands = categorized[selectedCategory];
+                const displayName = selectedCategory.charAt(0).toUpperCase() + selectedCategory.slice(1);
+                const categorySection = formatCategory(selectedCategory, categoryCommands);
+
+                let categoryMenu = `*╭┈───〔 ${displayName} Menu 〕┈───⊷*\n`;
+                categoryMenu += `*├▢ 📜 Category:* ${selectedCategory}\n`;
+                categoryMenu += `*├▢ 🔢 Total Commands:* ${categoryCommands.length}\n`;
+                categoryMenu += `*╰───────────────────⊷*`;
+                categoryMenu += `${categorySection}\n\n`;
+                categoryMenu += `> *ᴜsᴇ ${PREFIX}ᴍᴇɴᴜ2 ᴛᴏ sᴇᴇ ᴀʟʟ ᴍᴇɴᴜs ᴀɢᴀɪɴ*`;
+
+                const categoryMedia = await resolveMedia(BOT_MEDIA_URL, localImagePath);
+                await conn.sendMessage(senderID, {
+                    ...categoryMedia,
+                    caption: categoryMenu,
+                    contextInfo: commonContextInfo(receivedMsg.key.participant || receivedMsg.key.remoteJid)
+                }, { quoted: receivedMsg });
+            } else {
+                await conn.sendMessage(senderID, {
+                    text: `❌ *Invalid selection! Please reply with a valid number (1-${availableCategories.length}).*`,
+                    contextInfo: commonContextInfo(receivedMsg.key.participant || receivedMsg.key.remoteJid)
+                }, { quoted: receivedMsg });
+            }
+        };
+
+        conn.ev.on("messages.upsert", menuListener);
+
+        setTimeout(() => {
+            conn.ev.off("messages.upsert", menuListener);
+            console.log('🧹 Menu2 listener cleaned up (timeout)');
+        }, 20000);
+    } catch (e) {
+        console.error(e);
+        reply(`❌ Error:\n${e.message}`);
     }
 });
