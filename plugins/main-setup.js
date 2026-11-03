@@ -399,11 +399,14 @@ cmd({
 },
 async (conn, mek, m, { from, sender, pushname, reply, userConfig }) => {
     try {
+        // SAME config variables as `menu`
         const BOT_NAME = userConfig?.BOT_NAME || config.BOT_NAME;
         const OWNER_NAME = userConfig?.OWNER_NAME || config.OWNER_NAME;
         const PREFIX = userConfig?.PREFIX || config.PREFIX;
         const VERSION = userConfig?.VERSION || config.VERSION;
-        const BOT_MEDIA_URL = userConfig?.BOT_MEDIA_URL || config.BOT_MEDIA_URL;
+        const MODE = userConfig?.MODE || config.MODE;
+        const BOT_IMAGE = userConfig?.BOT_IMAGE || config.BOT_IMAGE;
+        const DESCRIPTION = userConfig?.DESCRIPTION || config.DESCRIPTION;
         const newsletterJid = resolveNewsletterJid(userConfig);
         const newsletterName = BOT_NAME;
 
@@ -436,8 +439,8 @@ ${menuOptions}*╰───────────────────⊷*
 
 > *ʀᴇᴘʟʏ ᴡɪᴛʜ ᴛʜᴇ ɴᴜᴍʙᴇʀ ᴛᴏ sᴇʟᴇᴄᴛ ᴍᴇɴᴜ (1-${availableCategories.length})*`;
 
-        const localImagePath = path.join(__dirname, '../lib/khanmd.jpg');
-        const mainMenuMedia = await resolveMedia(BOT_MEDIA_URL, localImagePath);
+        const localImagePath = path.join(__dirname, '../lib/jawadmd.jpg');
+        const mainMenuMedia = await resolveMedia(BOT_IMAGE, localImagePath);
 
         const sentMsg = await conn.sendMessage(from, {
             ...mainMenuMedia,
@@ -474,7 +477,7 @@ ${menuOptions}*╰───────────────────⊷*
                 categoryMenu += `${categorySection}\n\n`;
                 categoryMenu += `> *ᴜsᴇ ${PREFIX}ᴍᴇɴᴜ2 ᴛᴏ sᴇᴇ ᴀʟʟ ᴍᴇɴᴜs ᴀɢᴀɪɴ*`;
 
-                const categoryMedia = await resolveMedia(BOT_MEDIA_URL, localImagePath);
+                const categoryMedia = await resolveMedia(BOT_IMAGE, localImagePath);
                 await conn.sendMessage(senderID, {
                     ...categoryMedia,
                     caption: categoryMenu,
