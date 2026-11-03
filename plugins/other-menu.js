@@ -12,8 +12,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 cmd({
-    pattern: "channel",
-    alias: ["chinfo", "channelinfo", "newsletter", "ch"],
+    pattern: "chinfo",
+    alias: ["chinfo", "channelinfo"],
     desc: "Get WhatsApp channel information",
     react: "📢",
     category: "utility",
