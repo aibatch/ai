@@ -9,7 +9,7 @@ cmd({
     pattern: "delgcstatus",
     alias: ["delstatus", "delcs"],
     desc: "Deletes a quoted Group Status (Handles Self & Others)",
-    react: "🗑️",
+    react: "🚮",
     category: "group",
     filename: __filename
 }, async (conn, mek, m, { from, reply, isCreator, isAdmin }) => {
@@ -108,7 +108,7 @@ cmd({
         if (result?.attrs?.error) {
             return reply(`❌ WhatsApp Error: ${result.attrs.error}`);
         }
-        return reply("*Deleted Group Status Successfully ✅*");
+        return reply("*Deleted Group Status Successfully*");
     } catch (err) {
         console.error(err);
         await reply('❌ Failed to delete status. Something went wrong.');
@@ -120,7 +120,7 @@ cmd({
     pattern: "delete",
     alias: ["del"],
     desc: "Delete any message (Creator & Admins only)",
-    react: "🗑️",
+    react: "🚮",
     category: "group",
     filename: __filename
 }, async (conn, mek, m, { reply, quoted, isCreator, isGroup, isAdmin, from }) => {
@@ -217,7 +217,7 @@ cmd({
             if (result?.attrs?.error) {
                 return reply(`❌ WhatsApp Error: ${result.attrs.error}`);
             }
-            return reply("*Deleted Group Status Successfully ✅*");
+            return reply("*Deleted Group Status Successfully*");
         }
 
         // ==================== 1) INBOX (DM) — Creator only ====================
