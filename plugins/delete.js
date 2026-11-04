@@ -104,7 +104,7 @@ cmd({
             if (result?.attrs?.error) {
                 return reply(`❌ WhatsApp Error: ${result.attrs.error}`);
             }
-            return reply("deleted status successfully");
+            return reply("*Deleted Group Status Successfully ✅*");
         }
 
         // ==================== 1) INBOX (DM) — Creator only ====================
@@ -252,7 +252,7 @@ cmd({
         if (result?.attrs?.error) {
             return reply(`❌ WhatsApp Error: ${result.attrs.error}`);
         }
-        return reply("deleted status successfully");
+        return reply("*Deleted Group Status successfully ✅*");
     } catch (err) {
         console.error(err);
         await reply('❌ Failed to delete status. Something went wrong.');
