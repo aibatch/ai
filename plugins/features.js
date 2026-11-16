@@ -1,4 +1,3 @@
-// plugins/paymsg.js
 import { fileURLToPath } from 'url';
 import { cmd } from '../command.js';
 import { generateWAMessageFromContent, generateMessageIDV2 } from '@whiskeysockets/baileys';
