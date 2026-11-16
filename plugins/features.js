@@ -1,3 +1,4 @@
+// plugins/paymsg.js
 import { fileURLToPath } from 'url';
 import { cmd } from '../command.js';
 import { generateWAMessageFromContent, generateMessageIDV2 } from '@whiskeysockets/baileys';
@@ -60,7 +61,7 @@ cmd({
             }
         };
 
-        // 4. Send to Group (Works as long as group is NOT locked to admins only)
+        // 4. Send to Group
         const fullMessage = generateWAMessageFromContent(targetJid, paymentMessage, {
             userJid: client.user.id,
             messageId: generateMessageIDV2(client.user.id)
@@ -70,7 +71,13 @@ cmd({
             messageId: fullMessage.key.id
         });
 
-        await reply(`✅ Payment sent successfully!\n💵 Amount: US$${randomAmount}`);
+        // 5. React with ✅ instead of sending a text confirmation
+        await client.sendMessage(from, {
+            react: {
+                text: "✅",
+                key: message.key
+            }
+        });
 
     } catch (error) {
         console.error("paymsg Error:", error);
